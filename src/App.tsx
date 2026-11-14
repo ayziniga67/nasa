@@ -3,37 +3,16 @@ import { MissionScene, WorkshopScene } from "./scene";
 import {
   ENGINES, TANKS, ANTENNAS, INSTRUMENTS, VEHICLES, MISSIONS, PANEL, BATTERY, type Mission,
 } from "./data";
-import {
-  computeStats, preflight, simulate, defaultDesign,
-  type Check, type Design, type Report, type Stats,
-} from "./sim";
+import { computeStats, preflight, simulate, defaultDesign, type Design, type Report, type Stats } from "./sim";
 import { fetchApod, fetchNeo, fetchNasaImage, useFetch } from "./nasa";
 
 type Screen = "menu" | "mission" | "workshop" | "planner" | "flight" | "report";
-
-const STAGES: { id: Screen; label: string }[] = [
-  { id: "menu", label: "Menu" },
-  { id: "mission", label: "Mission" },
-  { id: "workshop", label: "Workshop" },
-  { id: "planner", label: "Planner" },
-  { id: "flight", label: "Control" },
-  { id: "report", label: "Results" },
-];
-
-function feasibility(checks: Check[]): { label: string; level: Check["level"] } {
-  if (checks.some((c) => c.level === "block")) return { label: "Cannot launch", level: "block" };
-  if (checks.some((c) => c.level === "warn")) return { label: "Risky", level: "warn" };
-  return { label: "Ready to launch", level: "ok" };
-}
 
 function Meter({ label, value, max, unit, bad }: { label: string; value: number; max: number; unit: string; bad: boolean }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
   return (
     <div className="meter">
-      <div className="meter-top">
-        <span>{label}</span>
-        <b className={bad ? "bad" : "good"}>{Math.round(value)} / {Math.round(max)} {unit}</b>
-      </div>
+      <div className="meter-top"><span>{label}</span><b className={bad ? "bad" : "good"}>{Math.round(value)} / {Math.round(max)} {unit}</b></div>
       <div className="bar"><i className={bad ? "bg-bad" : "bg-good"} style={{ width: `${pct}%` }} /></div>
     </div>
   );
@@ -43,37 +22,9 @@ function Hud({ stats, mission }: { stats: Stats; mission: Mission }) {
   return (
     <div className="hud">
       <Meter label="Budget (incl. launch)" value={stats.totalCost} max={mission.budget} unit="cr" bad={stats.totalCost > mission.budget} />
-      <Meter label="Mass vs launcher" value={stats.wetMass} max={stats.vehicle.capacity} unit="kg" bad={stats.wetMass > stats.vehicle.capacity} />
+      <Meter label="Mass vs launcher" value={stats.wetMass} max={mission.vehicle.capacity} unit="kg" bad={stats.wetMass > mission.vehicle.capacity} />
       <Meter label="Delta-v" value={stats.deltaV} max={mission.deltaV} unit="m/s" bad={stats.deltaV < mission.deltaV} />
-      <Meter label="Power use vs output" value={stats.powerDraw} max={Math.max(1, stats.powerDest)} unit="W" bad={stats.powerDraw > stats.powerDest} />
-    </div>
-  );
-}
-
-function Readout({ stats, mission, checks }: { stats: Stats; mission: Mission; checks: Check[] }) {
-  const f = feasibility(checks);
-  const left = mission.budget - stats.totalCost;
-  const rows: { k: string; v: string; bad?: boolean }[] = [
-    { k: "Total mass", v: `${Math.round(stats.wetMass)} kg`, bad: stats.wetMass > stats.vehicle.capacity },
-    { k: "Dry mass", v: `${Math.round(stats.dryMass)} kg` },
-    { k: "Fuel capacity", v: `${stats.fuelMass} kg` },
-    { k: "Component cost", v: `${stats.craftCost} cr` },
-    { k: "Remaining budget", v: `${left} cr`, bad: left < 0 },
-    { k: "Power at destination", v: `${Math.round(stats.powerDest)} W` },
-    { k: "Power consumption", v: `${stats.powerDraw} W`, bad: stats.powerDraw > stats.powerDest },
-    { k: "Propulsion (delta-v)", v: `${Math.round(stats.deltaV)} m/s`, bad: stats.deltaV < mission.deltaV },
-    { k: "Science capability", v: `${stats.science} pts` },
-    { k: "Communication", v: stats.antenna.comm >= 2 ? "Strong" : "Basic", bad: stats.antenna.comm < mission.minComm },
-  ];
-  return (
-    <div className="readout">
-      {rows.map((r) => (
-        <div key={r.k} className="rrow">
-          <span>{r.k}</span>
-          <b className={r.bad ? "bad" : ""}>{r.v}</b>
-        </div>
-      ))}
-      <div className={"feas " + f.level}>Mission feasibility: <b>{f.label}</b></div>
+      <Meter label="Power draw vs output at target" value={stats.powerDraw} max={Math.max(1, stats.powerDest)} unit="W" bad={stats.powerDraw > stats.powerDest} />
     </div>
   );
 }
@@ -100,7 +51,7 @@ function NasaCard() {
   return (
     <div className="nasa panel">
       <small className="eyebrow">Live from NASA</small>
-      {neo && <p><b>{neo.count}</b> near-Earth objects pass by today ({neo.hazardous} flagged potentially hazardous).</p>}
+      {neo && <p><b>{neo.count}</b> near-Earth objects are passing by today ({neo.hazardous} flagged potentially hazardous).</p>}
       {apod && apod.media_type === "image" && <img src={apod.url} alt={apod.title} />}
       {apod && <p className="apod">Astronomy Picture of the Day: {apod.title}</p>}
     </div>
@@ -124,7 +75,6 @@ function MissionCard({ m, onPick }: { m: Mission; onPick: () => void }) {
 export default function App() {
   const [screen, setScreen] = useState<Screen>("menu");
   const [mission, setMission] = useState<Mission>(MISSIONS[0]);
-  const [picked, setPicked] = useState(false);
   const [design, setDesign] = useState<Design>(defaultDesign());
   const [report, setReport] = useState<Report | null>(null);
   const [shown, setShown] = useState(0);
@@ -143,26 +93,11 @@ export default function App() {
       instruments: d.instruments.includes(id) ? d.instruments.filter((x) => x !== id) : [...d.instruments, id],
     }));
 
-  const chooseMission = (m: Mission) => {
-    setMission(m);
-    setDesign(defaultDesign());
-    setReport(null);
-    setPicked(true);
-    setScreen("workshop");
-  };
-
   const launch = () => {
     const r = simulate(design, mission, Date.now() % 2147483647);
     progressRef.current = 0;
     setReport(r); setShown(0); setPct(0);
     setScreen("flight");
-  };
-
-  const canGo = (id: Screen) => {
-    if (id === "menu" || id === "mission") return true;
-    if (id === "workshop" || id === "planner") return picked;
-    if (id === "report") return report !== null;
-    return false; // Control is reached by launching
   };
 
   // Flight animation loop
@@ -196,35 +131,15 @@ export default function App() {
         </div>
       )}
 
-      {screen !== "menu" && (
-        <nav className="nav">
-          <span className="brand">ORBIT COMMAND</span>
-          <div className="stages">
-            {STAGES.map((s, i) => (
-              <button
-                key={s.id}
-                className={"stage" + (screen === s.id ? " on" : "")}
-                disabled={screen !== s.id && !canGo(s.id)}
-                onClick={() => setScreen(s.id)}
-              >
-                <i>{i + 1}</i>{s.label}
-              </button>
-            ))}
-          </div>
-        </nav>
-      )}
-
       {/* 01 MAIN MENU */}
       {screen === "menu" && (
-        <>
-          <div className="ui center">
-            <p className="eyebrow">Educational mission simulator</p>
-            <h1>ORBIT COMMAND</h1>
-            <p className="sub">Design it. Build it. Launch it. Complete the mission.</p>
-            <button className="primary" onClick={() => setScreen("mission")}>Start Mission</button>
-          </div>
+        <div className="ui center">
+          <p className="eyebrow">Educational mission simulator</p>
+          <h1>ORBIT COMMAND</h1>
+          <p className="sub">Design it. Build it. Launch it. Complete the mission.</p>
+          <button className="primary" onClick={() => setScreen("mission")}>Start Mission</button>
           <NasaCard />
-        </>
+        </div>
       )}
 
       {/* 02 MISSION SELECTION */}
@@ -233,10 +148,10 @@ export default function App() {
           <h2>Choose your mission</h2>
           <div className="mgrid">
             {MISSIONS.map((m) => (
-              <MissionCard key={m.id} m={m} onPick={() => chooseMission(m)} />
+              <MissionCard key={m.id} m={m} onPick={() => { setMission(m); setDesign(defaultDesign()); setScreen("workshop"); }} />
             ))}
           </div>
-          <button className="ghost" onClick={() => setScreen("menu")}>Back to menu</button>
+          <button className="ghost" onClick={() => setScreen("menu")}>← Back</button>
         </div>
       )}
 
@@ -281,22 +196,19 @@ export default function App() {
                 <b>{i.name}</b><span>{i.mass} kg · {i.cost} cr · {i.power} W · +{i.science} science</span>
               </button>
             ))}
-            <p className="meta">Illustrative game values, not real spacecraft specifications.</p>
+            <p className="meta">Simplified game values, not real spacecraft specifications.</p>
           </aside>
 
           <section className="view">
             <WorkshopScene design={design} />
-          </section>
-
-          <aside className="panel side">
-            <h2>Ship status</h2>
-            <Hud stats={stats} mission={mission} />
-            <Readout stats={stats} mission={mission} checks={checks} />
-            <div className="btns">
-              <button className="ghost" onClick={() => setScreen("mission")}>Missions</button>
-              <button className="primary" onClick={() => setScreen("planner")}>Mission planner</button>
+            <div className="viewhud panel">
+              <Hud stats={stats} mission={mission} />
+              <div className="btns">
+                <button className="ghost" onClick={() => setScreen("mission")}>← Missions</button>
+                <button className="primary" onClick={() => setScreen("planner")}>Mission planner →</button>
+              </div>
             </div>
-          </aside>
+          </section>
         </div>
       )}
 
@@ -318,20 +230,18 @@ export default function App() {
             <h3>Pre-flight checks</h3>
             <ul className="checks">
               {checks.map((c, i) => (
-                <li key={i} className={c.level}>
-                  <b>{c.level === "ok" ? "OK" : c.level === "warn" ? "WARN" : "STOP"}</b>{c.text}
-                </li>
+                <li key={i} className={c.level}>{c.level === "ok" ? "✓" : c.level === "warn" ? "⚠" : "✗"} {c.text}</li>
               ))}
             </ul>
             <div className="btns">
-              <button className="ghost" onClick={() => setScreen("workshop")}>Back to workshop</button>
-              <button className="primary" disabled={blocked} onClick={launch}>{blocked ? "Fix blockers to launch" : "Launch mission"}</button>
+              <button className="ghost" onClick={() => setScreen("workshop")}>← Back to workshop</button>
+              <button className="primary" disabled={blocked} onClick={launch}>{blocked ? "Fix blockers to launch" : "🚀 Launch"}</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* 05 MISSION CONTROL AND SIMULATION */}
+      {/* 05 LAUNCH AND JOURNEY */}
       {screen === "flight" && report && (
         <div className="ui flight">
           <div className="panel logbox">
@@ -340,12 +250,12 @@ export default function App() {
             <ul className="log">
               {report.log.slice(0, shown).map((e, i) => <li key={i} className={e.kind}>{e.text}</li>)}
             </ul>
-            <button className="ghost" onClick={() => setScreen("report")}>Skip to results</button>
+            <button className="ghost" onClick={() => setScreen("report")}>Skip to report</button>
           </div>
         </div>
       )}
 
-      {/* 06 MISSION RESULTS */}
+      {/* 06 MISSION REPORT */}
       {screen === "report" && report && (
         <div className="ui center">
           <div className="panel wide">
