@@ -1,293 +1,180 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { MissionScene, WorkshopScene } from "./Scene3D";
-import {
-  ENGINES, TANKS, ANTENNAS, INSTRUMENTS, VEHICLES, MISSIONS, PANEL, BATTERY, type Mission,
-} from "./data";
-import { computeStats, preflight, simulate, defaultDesign, type Design, type Report, type Stats } from "./sim";
-import { fetchApod, fetchNeo, fetchNasaImage, useFetch } from "./nasa";
+@import url("https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap");
 
-type Screen = "menu" | "mission" | "workshop" | "planner" | "flight" | "report";
-
-function Meter({ label, value, max, unit, bad }: { label: string; value: number; max: number; unit: string; bad: boolean }) {
-  const pct = Math.max(0, Math.min(100, (value / max) * 100));
-  return (
-    <div className="meter">
-      <div className="meter-top"><span>{label}</span><b className={bad ? "bad" : "good"}>{Math.round(value)} / {Math.round(max)} {unit}</b></div>
-      <div className="bar"><i className={bad ? "bg-bad" : "bg-good"} style={{ width: `${pct}%` }} /></div>
-    </div>
-  );
+@font-face {
+  font-family: "Boldspixels";
+  src: url("/boldspixels.ttf") format("truetype");
+  font-display: swap;
 }
 
-function Hud({ stats, mission }: { stats: Stats; mission: Mission }) {
-  return (
-    <div className="hud">
-      <Meter label="Budget (incl. launch)" value={stats.totalCost} max={mission.budget} unit="cr" bad={stats.totalCost > mission.budget} />
-      <Meter label="Mass vs launcher" value={stats.wetMass} max={stats.vehicle.capacity} unit="kg" bad={stats.wetMass > stats.vehicle.capacity} />
-      <Meter label="Delta-v" value={stats.deltaV} max={mission.deltaV} unit="m/s" bad={stats.deltaV < mission.deltaV} />
-      <Meter label="Power draw vs output at target" value={stats.powerDraw} max={Math.max(1, stats.powerDest)} unit="W" bad={stats.powerDraw > stats.powerDest} />
-    </div>
-  );
+:root {
+  color-scheme: dark;
+  --text: #ecebe4;
+  --primary: #21897e;
+  --line: rgba(236, 235, 228, 0.22);
+  --soft: rgba(236, 235, 228, 0.65);
+  --panel: rgba(4, 8, 14, 0.5);
+  --space: #03060b;
+  --warn: #e0a458;
+  --bad: #e2655a;
+  --nav-h: 52px;
+  --display: "Boldspixels", "Courier New", monospace;
+  --body: "Satoshi", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-function Stepper({ label, detail, value, max, onChange }: {
-  label: string; detail: string; value: number; max: number; onChange: (n: number) => void;
-}) {
-  return (
-    <div className="row">
-      <div><b>{label}</b><small>{detail}</small></div>
-      <div className="step">
-        <button onClick={() => onChange(value - 1)} disabled={value <= 0}>−</button>
-        <span>{value}</span>
-        <button onClick={() => onChange(value + 1)} disabled={value >= max}>+</button>
-      </div>
-    </div>
-  );
+* { box-sizing: border-box; }
+html, body, #root {
+  margin: 0; height: 100%; background: var(--space); color: var(--text);
+  font-family: var(--body); font-size: 15px;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+
+.app { position: relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.bg { position: fixed; inset: 0; z-index: 0; }
+
+/* navigation */
+.nav {
+  position: relative; z-index: 2; flex: none; height: var(--nav-h);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 0 16px; border-bottom: 1px solid var(--line);
+  background: rgba(3, 6, 11, 0.55); backdrop-filter: blur(8px);
+}
+.brand { font-family: var(--display); font-size: 18px; letter-spacing: 0.08em; white-space: nowrap; }
+.stages { display: flex; gap: 6px; overflow-x: auto; }
+.stage {
+  display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  background: transparent; border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 10px; font-family: var(--display); font-size: 13px;
+}
+.stage i { font-style: normal; opacity: 0.6; }
+.stage.on { background: var(--primary); border-color: var(--primary); }
+.stage:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* layout */
+.ui { position: relative; z-index: 1; flex: 1; min-height: 0; pointer-events: none; }
+.ui > * { pointer-events: auto; }
+.center {
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  gap: 14px; padding: 16px; overflow-y: auto; text-align: center;
+}
+.center > :first-child { margin-top: auto; }
+.center > :last-child { margin-bottom: auto; }
+
+/* type */
+h1, h2, h3 { font-family: var(--display); font-weight: 400; margin: 8px 0; }
+h1 { font-size: clamp(34px, 8vw, 84px); letter-spacing: 0.1em; line-height: 1.05; text-align: center; }
+h2 { font-size: 24px; }
+h3 { font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.85; margin-top: 16px; }
+.eyebrow { text-transform: uppercase; letter-spacing: 0.25em; font-size: 11px; color: var(--primary); }
+.sub { color: var(--soft); margin: 0 0 8px; }
+.meta, .credit { font-size: 12px; color: var(--soft); }
+
+/* surfaces */
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px; backdrop-filter: blur(8px); text-align: left;
+}
+.wide { width: min(780px, 100%); max-height: calc(100vh - var(--nav-h) - 32px); overflow-y: auto; }
+
+/* buttons */
+.primary { background: var(--primary); border: 1px solid var(--primary); border-radius: 8px; padding: 12px 22px; font-weight: 700; }
+.primary:hover:not(:disabled) { filter: brightness(1.12); }
+.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.ghost { background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; }
+.ghost:hover { border-color: var(--text); }
+.btns { display: flex; justify-content: space-between; gap: 10px; margin-top: 14px; }
+
+/* mission cards */
+.mgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; width: min(900px, 100%); }
+.mcard { text-align: left; color: var(--text); transition: border-color 0.15s, transform 0.15s; }
+.mcard:hover { border-color: var(--primary); transform: translateY(-3px); }
+.mimg { height: 150px; border-radius: 8px; background: rgba(236, 235, 228, 0.06) center / cover; margin-bottom: 10px; }
+.mcard h3 { font-size: 18px; text-transform: none; letter-spacing: 0.04em; opacity: 1; margin-top: 4px; }
+
+/* workshop */
+.workshop {
+  display: grid; gap: 12px; padding: 12px;
+  grid-template-columns: minmax(290px, 360px) minmax(0, 1fr) minmax(250px, 300px);
+  grid-template-rows: minmax(0, 1fr);
+}
+.parts, .side { overflow-y: auto; min-height: 0; }
+.view { position: relative; min-height: 0; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+.side .hud { grid-template-columns: 1fr; }
+.card {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  background: rgba(236, 235, 228, 0.04); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px; margin-bottom: 8px;
+}
+.card span, .card small, .row small { display: block; font-size: 12px; color: var(--soft); }
+.card:hover { border-color: rgba(236, 235, 228, 0.5); }
+.card.sel { border-color: var(--primary); background: rgba(33, 137, 126, 0.2); }
+.row {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  background: rgba(236, 235, 228, 0.04); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 10px; margin-bottom: 8px;
+}
+.step { display: flex; align-items: center; gap: 10px; }
+.step button { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: transparent; }
+.step button:hover:not(:disabled) { border-color: var(--primary); }
+.step button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* meters and readout */
+.hud { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.meter-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; margin-bottom: 4px; }
+.bar { height: 6px; background: rgba(236, 235, 228, 0.14); border-radius: 99px; overflow: hidden; }
+.bar i { display: block; height: 100%; transition: width 0.2s; }
+.bg-good { background: var(--primary); }
+.bg-bad { background: var(--bad); }
+.good { color: var(--primary); }
+.bad { color: var(--bad); }
+.readout { margin-top: 12px; display: grid; }
+.rrow {
+  display: flex; justify-content: space-between; gap: 10px; padding: 6px 0;
+  border-bottom: 1px solid rgba(236, 235, 228, 0.1); font-size: 13px;
+}
+.rrow span { color: var(--soft); }
+.feas { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.feas.ok { border-color: var(--primary); }
+.feas.warn { border-color: var(--warn); }
+.feas.block { border-color: var(--bad); }
+
+/* planner */
+.vgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; font-size: 14px; }
+.checks b { font-family: var(--display); font-size: 12px; margin-right: 6px; }
+.checks .ok b { color: var(--primary); }
+.checks .warn { color: var(--warn); }
+.checks .block { color: var(--bad); }
+
+/* flight */
+.flight { display: flex; align-items: flex-end; justify-content: flex-start; padding: 16px; }
+.logbox { width: min(440px, 100%); }
+.log { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 6px; max-height: 38vh; overflow-y: auto; font-size: 14px; }
+.log .warn { color: var(--warn); }
+.log .fail { color: var(--bad); font-weight: 700; }
+
+/* report */
+.banner { font-family: var(--display); font-size: 28px; letter-spacing: 0.08em; margin: 0 0 10px; }
+.banner.success { color: var(--primary); }
+.banner.partial { color: var(--warn); }
+.banner.failure { color: var(--bad); }
+.scoregrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.scoregrid div { background: rgba(236, 235, 228, 0.05); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.scoregrid small { display: block; color: var(--soft); font-size: 11px; text-transform: uppercase; }
+.scoregrid b { font-size: 20px; }
+.fact { border-left: 3px solid var(--primary); background: rgba(236, 235, 228, 0.05); padding: 10px 12px; border-radius: 6px; }
+
+/* NASA and 3D labels */
+.nasa { position: fixed; right: 16px; bottom: 16px; z-index: 3; max-width: 340px; font-size: 13px; }
+.nasa img { width: 100%; border-radius: 8px; margin-top: 6px; }
+.apod { color: var(--soft); font-size: 12px; margin: 6px 0 0; }
+.tag3d {
+  font-family: var(--body); font-size: 11px; color: var(--text);
+  background: rgba(3, 6, 11, 0.6); padding: 1px 6px; border-radius: 4px; white-space: nowrap;
 }
 
-function NasaCard() {
-  const apod = useFetch(fetchApod, "apod");
-  const neo = useFetch(fetchNeo, "neo");
-  if (!apod && !neo) return null;
-  return (
-    <div className="nasa panel">
-      <small className="eyebrow">Live from NASA</small>
-      {neo && <p><b>{neo.count}</b> near-Earth objects are passing by today ({neo.hazardous} flagged potentially hazardous).</p>}
-      {apod && apod.media_type === "image" && <img src={apod.url} alt={apod.title} />}
-      {apod && <p className="apod">Astronomy Picture of the Day: {apod.title}</p>}
-    </div>
-  );
-}
-
-function MissionCard({ m, onPick }: { m: Mission; onPick: () => void }) {
-  const img = useFetch((s) => fetchNasaImage(m.nasaQuery, s), m.id);
-  return (
-    <button className="mcard panel" onClick={onPick}>
-      <div className="mimg" style={img ? { backgroundImage: `url(${img.url})` } : undefined} />
-      <small className="eyebrow">{m.tagline}</small>
-      <h3>{m.name}</h3>
-      <p>{m.brief}</p>
-      <p className="meta">Budget {m.budget} cr · Needs {m.deltaV} m/s · Travel {m.travelTime}</p>
-      {img && <small className="credit">Image: NASA — {img.title}</small>}
-    </button>
-  );
-}
-
-export default function App() {
-  const [screen, setScreen] = useState<Screen>("menu");
-  const [mission, setMission] = useState<Mission>(MISSIONS[0]);
-  const [design, setDesign] = useState<Design>(defaultDesign());
-  const [report, setReport] = useState<Report | null>(null);
-  const [shown, setShown] = useState(0);
-  const [pct, setPct] = useState(0);
-  const progressRef = useRef(0);
-
-  const stats = useMemo(() => computeStats(design, mission), [design, mission]);
-  const checks = useMemo(() => preflight(stats, design, mission), [stats, design, mission]);
-  const blocked = checks.some((c) => c.level === "block");
-
-  const patch = (p: Partial<Design>) => setDesign((d) => ({ ...d, ...p }));
-  const setTank = (id: string, n: number) => setDesign((d) => ({ ...d, tanks: { ...d.tanks, [id]: n } }));
-  const toggleInstrument = (id: string) =>
-    setDesign((d) => ({
-      ...d,
-      instruments: d.instruments.includes(id) ? d.instruments.filter((x) => x !== id) : [...d.instruments, id],
-    }));
-
-  const launch = () => {
-    const r = simulate(design, mission, Date.now() % 2147483647);
-    progressRef.current = 0;
-    setReport(r); setShown(0); setPct(0);
-    setScreen("flight");
-  };
-
-  // Flight animation loop
-  useEffect(() => {
-    if (screen !== "flight" || !report) return;
-    const DURATION = 18000;
-    const limit = report.failAt ?? 1;
-    const t0 = performance.now();
-    let raf = 0;
-    let done: ReturnType<typeof setTimeout> | undefined;
-    const tick = (now: number) => {
-      const p = Math.min((now - t0) / DURATION, limit + 0.04);
-      progressRef.current = Math.min(p, 1);
-      const visible = Math.min(p, limit);
-      setShown(report.log.filter((e) => e.at <= visible + 1e-9).length);
-      setPct(Math.round(visible * 100));
-      if (p >= limit + 0.04) { done = setTimeout(() => setScreen("report"), 1800); return; }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => { cancelAnimationFrame(raf); if (done) clearTimeout(done); };
-  }, [screen, report]);
-
-  const sceneMode = screen === "flight" ? mission.destination : "menu";
-
-  return (
-    <div className="app">
-      {screen !== "workshop" && (
-        <div className="bg">
-          <MissionScene mode={sceneMode} progressRef={progressRef} failAt={screen === "flight" ? report?.failAt ?? null : null} design={design} />
-        </div>
-      )}
-
-      {/* 01 MAIN MENU */}
-      {screen === "menu" && (
-        <div className="ui center">
-          <p className="eyebrow">Educational mission simulator</p>
-          <h1>ORBIT COMMAND</h1>
-          <p className="sub">Design it. Build it. Launch it. Complete the mission.</p>
-          <button className="primary" onClick={() => setScreen("mission")}>Start Mission</button>
-          <NasaCard />
-        </div>
-      )}
-
-      {/* 02 MISSION SELECTION */}
-      {screen === "mission" && (
-        <div className="ui center">
-          <h2>Choose your mission</h2>
-          <div className="mgrid">
-            {MISSIONS.map((m) => (
-              <MissionCard key={m.id} m={m} onPick={() => { setMission(m); setDesign(defaultDesign()); setScreen("workshop"); }} />
-            ))}
-          </div>
-          <button className="ghost" onClick={() => setScreen("menu")}>← Back</button>
-        </div>
-      )}
-
-      {/* 03 SPACECRAFT WORKSHOP */}
-      {screen === "workshop" && (
-        <div className="ui workshop">
-          <aside className="panel parts">
-            <h2>Spacecraft workshop</h2>
-            <p className="meta">Mission: {mission.name}</p>
-
-            <h3>Engine</h3>
-            {ENGINES.map((e) => (
-              <button key={e.id} className={"card" + (design.engineId === e.id ? " sel" : "")} onClick={() => patch({ engineId: e.id })}>
-                <b>{e.name}</b>
-                <span>{e.mass} kg · {e.cost} cr · Isp {e.isp} s{e.power ? ` · needs ${e.power} W` : ""}</span>
-                <small>{e.blurb}</small>
-              </button>
-            ))}
-
-            <h3>Fuel tanks</h3>
-            {TANKS.map((t) => (
-              <Stepper key={t.id} label={t.name} detail={`${t.mass} kg dry · ${t.fuel} kg fuel · ${t.cost} cr`}
-                value={design.tanks[t.id] ?? 0} max={3} onChange={(n) => setTank(t.id, n)} />
-            ))}
-
-            <h3>Power</h3>
-            <Stepper label="Solar panels" detail={`${PANEL.mass} kg · ${PANEL.cost} cr · ${PANEL.watts} W at Earth`}
-              value={design.panels} max={8} onChange={(n) => patch({ panels: n })} />
-            <Stepper label="Battery" detail={`${BATTERY.mass} kg · ${BATTERY.cost} cr · backup in solar flares`}
-              value={design.batteries} max={4} onChange={(n) => patch({ batteries: n })} />
-
-            <h3>Antenna</h3>
-            {ANTENNAS.map((a) => (
-              <button key={a.id} className={"card" + (design.antennaId === a.id ? " sel" : "")} onClick={() => patch({ antennaId: a.id })}>
-                <b>{a.name}</b><span>{a.mass} kg · {a.cost} cr · {a.power} W</span>
-              </button>
-            ))}
-
-            <h3>Scientific instruments</h3>
-            {INSTRUMENTS.map((i) => (
-              <button key={i.id} className={"card" + (design.instruments.includes(i.id) ? " sel" : "")} onClick={() => toggleInstrument(i.id)}>
-                <b>{i.name}</b><span>{i.mass} kg · {i.cost} cr · {i.power} W · +{i.science} science</span>
-              </button>
-            ))}
-            <p className="meta">Simplified game values, not real spacecraft specifications.</p>
-          </aside>
-
-          <section className="view">
-            <WorkshopScene design={design} />
-            <div className="viewhud panel">
-              <Hud stats={stats} mission={mission} />
-              <div className="btns">
-                <button className="ghost" onClick={() => setScreen("mission")}>← Missions</button>
-                <button className="primary" onClick={() => setScreen("planner")}>Mission planner →</button>
-              </div>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {/* 04 MISSION PLANNER */}
-      {screen === "planner" && (
-        <div className="ui center">
-          <div className="panel wide">
-            <h2>Mission planner: {mission.name}</h2>
-            <h3>Launch vehicle</h3>
-            <div className="vgrid">
-              {VEHICLES.map((v) => (
-                <button key={v.id} className={"card" + (design.vehicleId === v.id ? " sel" : "")} onClick={() => patch({ vehicleId: v.id })}>
-                  <b>{v.name}</b><span>Lifts {v.capacity} kg · {v.cost} cr</span>
-                  {stats.wetMass > v.capacity && <small className="bad">Too heavy for this vehicle</small>}
-                </button>
-              ))}
-            </div>
-            <Hud stats={stats} mission={mission} />
-            <h3>Pre-flight checks</h3>
-            <ul className="checks">
-              {checks.map((c, i) => (
-                <li key={i} className={c.level}>{c.level === "ok" ? "✓" : c.level === "warn" ? "⚠" : "✗"} {c.text}</li>
-              ))}
-            </ul>
-            <div className="btns">
-              <button className="ghost" onClick={() => setScreen("workshop")}>← Back to workshop</button>
-              <button className="primary" disabled={blocked} onClick={launch}>{blocked ? "Fix blockers to launch" : "🚀 Launch"}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 05 LAUNCH AND JOURNEY */}
-      {screen === "flight" && report && (
-        <div className="ui flight">
-          <div className="panel logbox">
-            <div className="meter-top"><b>Mission progress</b><span>{pct}%</span></div>
-            <div className="bar"><i className="bg-good" style={{ width: `${pct}%` }} /></div>
-            <ul className="log">
-              {report.log.slice(0, shown).map((e, i) => <li key={i} className={e.kind}>{e.text}</li>)}
-            </ul>
-            <button className="ghost" onClick={() => setScreen("report")}>Skip to report</button>
-          </div>
-        </div>
-      )}
-
-      {/* 06 MISSION REPORT */}
-      {screen === "report" && report && (
-        <div className="ui center">
-          <div className="panel wide">
-            <p className={"banner " + report.outcome}>
-              {report.outcome === "success" ? "MISSION SUCCESS" : report.outcome === "partial" ? "PARTIAL SUCCESS" : "MISSION FAILED"}
-            </p>
-            <div className="scoregrid">
-              <div><small>Score</small><b>{report.score}</b></div>
-              <div><small>Science</small><b>{report.science}/{mission.scienceTarget}</b></div>
-              <div><small>Efficiency bonus</small><b>+{report.bonus}</b></div>
-              <div><small>Cost</small><b>{report.stats.totalCost}/{mission.budget}</b></div>
-              <div><small>Launch mass</small><b>{Math.round(report.stats.wetMass)} kg</b></div>
-              <div><small>Delta-v</small><b>{Math.round(report.stats.deltaV)} m/s</b></div>
-            </div>
-
-            <h3>Engineering problems</h3>
-            {report.problems.length === 0
-              ? <p>None. Clean mission.</p>
-              : <ul>{report.problems.map((p, i) => <li key={i}>{p}</li>)}</ul>}
-
-            <h3>Try this next time</h3>
-            <ul>{report.tips.map((t, i) => <li key={i}>{t}</li>)}</ul>
-
-            <p className="fact"><b>Did you know?</b> {mission.fact}</p>
-
-            <div className="btns">
-              <button className="ghost" onClick={() => setScreen("mission")}>New mission</button>
-              <button className="primary" onClick={() => setScreen("workshop")}>Redesign and retry</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+@media (max-width: 1000px) {
+  .workshop { grid-template-columns: 1fr; grid-template-rows: none; overflow-y: auto; align-content: start; }
+  .view { order: -1; height: 42vh; min-height: 280px; }
+  .parts, .side { overflow: visible; }
+  .nasa, .brand { display: none; }
 }
